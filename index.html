@@ -2,7 +2,13 @@
 <html lang="uk">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="HappyZavr">
+<meta name="theme-color" content="#1F3864">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>🦕</text></svg>">
 <title>🦕 Хепизавр</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
@@ -367,6 +373,39 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:var(--gray);color:var(--
 .pr-color{transition:transform .15s}
 .pr-color:hover{transform:scale(1.15)}
 .pr-color.active{border:3px solid #1F3864 !important}
+
+/* MOBILE */
+@media(max-width:580px){
+  .page{padding:10px!important}
+  .grid{grid-template-columns:1fr!important;gap:10px!important}
+  .hdr{padding:0 10px!important;height:52px!important}
+  .hdr h1{font-size:15px!important}
+  .hdr-btns .btn{padding:4px 8px!important;font-size:11px!important}
+  .stats{gap:6px!important;flex-wrap:nowrap!important}
+  .stat{padding:10px 12px!important;min-width:0!important}
+  .stat .v{font-size:18px!important}
+  .stat .l{font-size:9px!important}
+  .dir-tab{padding:6px 10px!important;font-size:11px!important}
+  .dot{width:32px!important;height:32px!important}
+  .card-foot .btn{padding:4px 7px!important;font-size:10px!important}
+  .sidebar{width:260px!important}
+  .bk-card-body{grid-template-columns:1fr!important}
+}
+@media(hover:none){
+  .dot{min-width:38px!important;min-height:38px!important}
+  .dot:active{transform:scale(.9)}
+}
+@media(display-mode:standalone){
+  .hdr{padding-top:env(safe-area-inset-top)!important}
+}
+.install-banner{display:none;position:fixed;bottom:16px;left:16px;right:16px;z-index:250;
+  background:linear-gradient(135deg,#6b21a8,#9333ea);color:#fff;border-radius:16px;
+  padding:14px 16px;box-shadow:0 8px 30px rgba(107,33,168,.4);
+  align-items:center;gap:12px;font-size:13px;font-weight:600}
+.install-banner.show{display:flex}
+.install-banner button{background:rgba(255,255,255,.2);border:none;color:#fff;
+  padding:8px 16px;border-radius:10px;font-weight:700;cursor:pointer;white-space:nowrap}
+.install-banner .dismiss{background:none;padding:4px;font-size:18px;opacity:.7}
 </style>
 </head>
 <body>
@@ -1141,6 +1180,12 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:var(--gray);color:var(--
     </div>
   </div>
 
+  <div class="install-banner" id="installBanner">
+    <span>🦕</span>
+    <span style="flex:1">Додай HappyZavr на головний екран!</span>
+    <button onclick="installApp()">📲 Додати</button>
+    <button class="dismiss" onclick="dismissInstall()">✕</button>
+  </div>
   <div class="toast" id="toast"></div>
 
 <script>
@@ -3774,6 +3819,32 @@ async function makeBinPublic() {
     toast('⚠️ Помилка: ' + e.message, 'warn');
   }
 }
+
+let deferredPrompt=null;
+window.addEventListener('beforeinstallprompt',e=>{
+  e.preventDefault();deferredPrompt=e;
+  if(!localStorage.getItem('hp_no_install'))
+    document.getElementById('installBanner').classList.add('show');
+});
+function installApp(){
+  if(deferredPrompt){deferredPrompt.prompt();deferredPrompt=null;}
+  else{
+    const ios=/iPad|iPhone|iPod/.test(navigator.userAgent);
+    toast(ios?'📲 Поділитись → На екран Домому':'📲 Меню → На головний екран','success');
+  }
+  document.getElementById('installBanner').classList.remove('show');
+}
+function dismissInstall(){
+  document.getElementById('installBanner').classList.remove('show');
+  localStorage.setItem('hp_no_install','1');
+}
+setTimeout(()=>{
+  const ios=/iPad|iPhone|iPod/.test(navigator.userAgent);
+  const standalone=window.navigator.standalone||window.matchMedia('(display-mode:standalone)').matches;
+  if(ios&&!standalone&&!localStorage.getItem('hp_no_install'))
+    document.getElementById('installBanner').classList.add('show');
+},3000);
+
 
 function uploadPhoto(clientId, input) {
   const file = input.files[0];
