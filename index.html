@@ -1429,6 +1429,8 @@ function showSalaryCard(encoded) {
 
 async function loadCompactCard(encoded) {
   try {
+    // Відрізати читабельний хвіст "~Імя-Прізвище" (для даних не потрібен)
+    encoded = String(encoded || '').split('~')[0];
     const base64 = encoded.replace(/-/g,'+').replace(/_/g,'/');
     const pad = base64.length % 4 ? '='.repeat(4 - base64.length % 4) : '';
     const binary = atob(base64 + pad);
@@ -1437,6 +1439,57 @@ async function loadCompactCard(encoded) {
     const compact = new TextDecoder('utf-8').decode(bytes);
 
     let name, direction, dirKey, startDate, endDate, totalLessons, crossMonth, lessonDates, att;
+
+    if (compact.indexOf('\x1f') > -1) {
+      // Новий компактний формат: імя|dirKey|напрямок|ДДММРР|ДДММРР|всього|заняття
+      const f = compact.split('\x1f');
+      name   = f[0] || '';
+      dirKey = f[1] || '';
+      const cfg = (typeof DIR_CONFIG !== 'undefined') ? DIR_CONFIG[dirKey] : null;
+      direction = f[2] || (cfg ? cfg.public : dirKey);
+      const s6 = f[3] || '';
+      const e6 = f[4] || '';
+      const toDMY = v => v && v.length===6 ? v.slice(0,2)+'.'+v.slice(2,4)+'.20'+v.slice(4,6) : '';
+      startDate = toDMY(s6);
+      endDate   = toDMY(e6);
+      totalLessons = parseInt(f[5]) || (cfg ? cfg.total : 0);
+      const lessonsStr = f[6] || '';
+
+      lessonDates = [];
+      att = {};
+      let yr = s6 ? 2000 + parseInt(s6.slice(4,6)) : 2026;
+      let prevM = s6 ? parseInt(s6.slice(2,4)) : 1;
+      const cnt = Math.floor(lessonsStr.length / 5);
+      for (let i=0; i<cnt; i++) {
+        const chunk = lessonsStr.substr(i*5, 5);
+        const mm = chunk.slice(0,2), dd = chunk.slice(2,4), stt = chunk.slice(4,5);
+        if (mm === '00' || dd === '00') {
+          lessonDates.push('slot-' + i);
+        } else {
+          const m = parseInt(mm);
+          if (m < prevM) yr++;      // перехід через новий рік
+          prevM = m;
+          lessonDates.push(yr + '-' + mm + '-' + dd);
+        }
+        if (stt === 'p') att[i] = 'present';
+        else if (stt === 'a') att[i] = 'absent';
+      }
+      crossMonth = (s6 && e6) ? (s6.slice(2,4) !== e6.slice(2,4)) : false;
+
+      const client = {
+        name, direction, dirKey, startDate, endDate, totalLessons, crossMonth,
+        lessonDates, id: name + '§compact',
+      };
+      clients = [client];
+      attend = {};
+      attend[client.id] = att;
+
+      const html = buildClientCardHTML(client);
+      document.open();
+      document.write(html);
+      document.close();
+      return;
+    }
 
     if (compact.charAt(0) === '{') {
       // Новий повний формат (JSON) — реальні дати + статуси всіх занять
@@ -4495,27 +4548,38 @@ function buildCardData(c) {
 
 function encodeCardUrl(c) {
   const att = getAtt(c.id);
-  // Повний формат (JSON): несе РЕАЛЬНІ дати всіх занять, включно з перенесеними,
-  // та їх статуси. Так батьківська картка показує точно те саме, що й адмінка.
-  const data = {
-    n:  c.name,
-    d:  c.direction || '',
-    dk: c.dirKey || '',
-    s:  c.startDate || '',
-    e:  c.endDate || '',
-    t:  c.totalLessons || 0,
-    cm: c.crossMonth ? 1 : 0,
-    p:  (c.lessonDates||[]).map((dt,i) => ({
-      dt: dt,
-      s:  att[i]==='present' ? 'p' : att[i]==='absent' ? 'a' : ''
-    }))
-  };
+  // Компактний формат: несе РЕАЛЬНІ дати всіх занять (включно з перенесеними)
+  // та їх статуси, але у 4 рази коротший за JSON.
+  // Поля через \x1f: імя | dirKey | напрямок | ДДММРР поч | ДДММРР кін | всього | заняття
+  // Кожне заняття = MMDD + статус(p/a/_), 5 символів. slot-дати → "0000".
+  const d6 = s => { const p=(s||'').split('.'); return p.length===3 ? p[0]+p[1]+p[2].slice(2) : ''; };
+  const lessons = (c.lessonDates||[]).map((dt,i) => {
+    let md = '0000';
+    if (dt && !String(dt).startsWith('slot-')) {
+      const p = String(dt).split('-'); // YYYY-MM-DD
+      if (p.length===3) md = p[1]+p[2];
+    }
+    const s = att[i]==='present' ? 'p' : att[i]==='absent' ? 'a' : '_';
+    return md + s;
+  }).join('');
 
-  const json  = JSON.stringify(data);
-  const bytes = new TextEncoder().encode(json);
+  const compact = [
+    c.name || '',
+    c.dirKey || '',
+    c.direction || '',
+    d6(c.startDate),
+    d6(c.endDate),
+    String(c.totalLessons || 0),
+    lessons
+  ].join('\x1f');
+
+  const bytes = new TextEncoder().encode(compact);
   let binary = ''; bytes.forEach(b => binary += String.fromCharCode(b));
-  return 'https://igorzagorij5-dot.github.io/hepizavr/#c=' +
-    btoa(binary).replace(/[+]/g,'-').replace(/[/]/g,'_').replace(/=/g,'');
+  const b64 = btoa(binary).replace(/[+]/g,'-').replace(/[/]/g,'_').replace(/=/g,'');
+
+  // Читабельне імя дитини в кінці посилання (після ~) — на дані не впливає
+  const slug = (c.name || '').trim().replace(/[~#/\\?&]/g,' ').replace(/\s+/g,'-');
+  return 'https://igorzagorij5-dot.github.io/hepizavr/#c=' + b64 + (slug ? '~' + slug : '');
 }
 
 function copyCardLink(id) {
