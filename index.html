@@ -1224,6 +1224,18 @@ window.onload = async function() {
     } else {
       await loadPublicCard(hash.slice(6));
     }
+  } else if (hash.length > 1 && hash.indexOf('/') > -1) {
+    // Короткий формат: #Прізвище-Імя/payload — імя спереду
+    const raw = hash.slice(1);
+    const si  = raw.indexOf('/');
+    const slug = raw.slice(0, si);
+    const payload = raw.slice(si + 1);
+    let nm = slug;
+    try { nm = decodeURIComponent(slug); } catch(e) {}
+    nm = nm.replace(/-/g, ' ').trim();
+    document.getElementById('adminView').style.display = 'none';
+    document.getElementById('pubView').style.display   = 'block';
+    await loadCompactCard(payload, nm);
   } else {
     // Also check query params for backwards compat
     const params = new URLSearchParams(window.location.search);
@@ -4548,9 +4560,9 @@ function buildCardData(c) {
 
 function encodeCardUrl(c) {
   const att = getAtt(c.id);
-  // Компактний формат: несе РЕАЛЬНІ дати всіх занять (включно з перенесеними)
-  // та їх статуси, але у 4 рази коротший за JSON.
-  // Поля через \x1f: імя | dirKey | напрямок | ДДММРР поч | ДДММРР кін | всього | заняття
+  // Максимально короткий формат. Імя дитини стоїть СПЕРЕДУ (одразу після #),
+  // а в даних лишається тільки те, що не можна вивести:
+  //   dirKey | ДДММРР поч | ДДММРР кін | заняття [| напрямок якщо dirKey невідомий]
   // Кожне заняття = MMDD + статус(p/a/_), 5 символів. slot-дати → "0000".
   const d6 = s => { const p=(s||'').split('.'); return p.length===3 ? p[0]+p[1]+p[2].slice(2) : ''; };
   const lessons = (c.lessonDates||[]).map((dt,i) => {
@@ -4563,23 +4575,18 @@ function encodeCardUrl(c) {
     return md + s;
   }).join('');
 
-  const compact = [
-    c.name || '',
-    c.dirKey || '',
-    c.direction || '',
-    d6(c.startDate),
-    d6(c.endDate),
-    String(c.totalLessons || 0),
-    lessons
-  ].join('\x1f');
+  const cfg = (typeof DIR_CONFIG !== 'undefined') ? DIR_CONFIG[c.dirKey] : null;
+  const arr = [ c.dirKey || '', d6(c.startDate), d6(c.endDate), lessons ];
+  if (!cfg && c.direction) arr.push(c.direction); // напрямок лише коли не виводиться з dirKey
+  const compact = arr.join('\x1f');
 
   const bytes = new TextEncoder().encode(compact);
   let binary = ''; bytes.forEach(b => binary += String.fromCharCode(b));
   const b64 = btoa(binary).replace(/[+]/g,'-').replace(/[/]/g,'_').replace(/=/g,'');
 
-  // Читабельне імя дитини в кінці посилання (після ~) — на дані не впливає
-  const slug = (c.name || '').trim().replace(/[~#/\\?&]/g,' ').replace(/\s+/g,'-');
-  return 'https://igorzagorij5-dot.github.io/hepizavr/#c=' + b64 + (slug ? '~' + slug : '');
+  // Прізвище-Імя спереду, читабельно; пробіли → "-"
+  const slug = (c.name || '').trim().replace(/[#/\\?&~]/g,' ').replace(/\s+/g,'-');
+  return 'https://igorzagorij5-dot.github.io/hepizavr/#' + slug + '/' + b64;
 }
 
 function copyCardLink(id) {
