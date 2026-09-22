@@ -1225,17 +1225,22 @@ window.onload = async function() {
       await loadPublicCard(hash.slice(6));
     }
   } else if (hash.length > 1 && hash.indexOf('/') > -1) {
-    // Короткий формат: #Прізвище-Імя/payload — імя спереду
-    const raw = hash.slice(1);
-    const si  = raw.indexOf('/');
-    const slug = raw.slice(0, si);
-    const payload = raw.slice(si + 1);
-    let nm = slug;
-    try { nm = decodeURIComponent(slug); } catch(e) {}
+    // Формати з іменем спереду:
+    //   ЖИВИЙ:      #Прізвище-Імя/L/binId/clientKey  (тягне свіжі дані з хмари)
+    //   СТАТИЧНИЙ:  #Прізвище-Імя/payload            (знімок у самому посиланні)
+    const raw   = hash.slice(1);
+    const parts = raw.split('/');
+    let nm = parts[0];
+    try { nm = decodeURIComponent(parts[0]); } catch(e) {}
     nm = nm.replace(/-/g, ' ').trim();
     document.getElementById('adminView').style.display = 'none';
     document.getElementById('pubView').style.display   = 'block';
-    await loadCompactCard(payload, nm);
+    if (parts[1] === 'L') {
+      await loadLiveCard(parts[2] || '', parts[3] || '', nm);
+    } else {
+      const payload = raw.slice(raw.indexOf('/') + 1);
+      await loadCompactCard(payload, nm);
+    }
   } else {
     // Also check query params for backwards compat
     const params = new URLSearchParams(window.location.search);
@@ -1436,6 +1441,54 @@ function showSalaryCard(encoded) {
     document.getElementById('pubView').innerHTML = html;
   } catch(e) {
     document.getElementById('pubView').innerHTML = '<div style="padding:40px;text-align:center">Помилка зчитування</div>';
+  }
+}
+
+// ЖИВА картка: тягне свіжі дані з біна JSONBin і показує актуальний стан.
+// Оновлюється щоразу, коли адмінка зберігає дані в хмару.
+async function loadLiveCard(binId, clientKey, slugName) {
+  const pv = document.getElementById('pubView');
+  try {
+    if (pv) pv.innerHTML =
+      '<div style="font-family:sans-serif;min-height:100vh;display:flex;align-items:center;'+
+      'justify-content:center;background:linear-gradient(160deg,#FFDEE9,#B5DBFF,#e8d5f5)">'+
+      '<div style="text-align:center"><div style="font-size:44px">🦕</div>'+
+      '<div style="color:#7C3AED;font-weight:800;margin-top:10px">Завантаження…</div></div></div>';
+
+    const res = await fetch('https://api.jsonbin.io/v3/b/' + binId + '/latest', {
+      headers: { 'X-Bin-Meta': 'false' },
+      cache: 'no-store'
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const rec = await res.json();
+    const record = (rec && rec.record) ? rec.record : rec;
+    const cls = record.clients || [];
+    const allAtt = record.attend || {};
+
+    const cid = decodeId(clientKey);
+    let c = cls.find(x => x.id === cid);
+    if (!c && slugName) {
+      const target = slugName.trim().toLowerCase();
+      c = cls.find(x => (x.name||'').trim().toLowerCase() === target);
+    }
+    if (!c) throw new Error('Картку не знайдено');
+
+    clients = [c];
+    attend = {};
+    attend[c.id] = allAtt[c.id] || {};
+
+    const html = buildClientCardHTML(c);
+    document.open();
+    document.write(html);
+    document.close();
+  } catch(e) {
+    if (pv) pv.innerHTML =
+      '<div style="font-family:sans-serif;padding:60px;text-align:center">'+
+      '<div style="font-size:36px;margin-bottom:10px">🦕</div>'+
+      '<h2 style="color:#1a1a2e">Помилка завантаження</h2>'+
+      '<p style="color:#666">' + e.message + '</p>'+
+      '<p style="color:#999;font-size:13px;margin-top:8px">Переконайтесь, що хмару зроблено публічною '+
+      '(кнопка «🌐 Зробити публічним» у Налаштуваннях).</p></div>';
   }
 }
 
@@ -4516,7 +4569,7 @@ function renderCardLinks() {
     const rem = getRemain(c);
     const st  = getStatus(c);
     const em  = st==='active'?'🟢':st==='ending'?'🟡':'🔴';
-    const url = encodeCardUrl(c);
+    const url = liveCardUrl(c);
     return `<div style="display:flex;align-items:center;gap:10px;padding:12px 14px;
       background:var(--gray);border-radius:10px;margin-bottom:8px">
       <div style="flex:1;min-width:0">
@@ -4535,21 +4588,14 @@ function renderCardLinks() {
 function openCard(id) {
   const c = clients.find(x=>x.id===id);
   if (!c) return;
-  const binId = cfg.binId || localStorage.getItem('hp_binId');
-  if (binId) {
-    const cardKey = encodeId(c.id);
-    const url = 'https://igorzagorij5-dot.github.io/happyzavr/#card=' + cardKey + '|' + binId;
-    window.open(url, '_blank');
-  } else {
-    const win = window.open('', '_blank');
-    if (win) { win.document.write(buildClientCardHTML(c)); win.document.close(); }
-  }
+  const url = liveCardUrl(c);
+  window.open(url, '_blank');
 }
 
 function openClientCard(id) {
   const c = clients.find(x=>x.id===id);
   if (!c) return;
-  const url = encodeCardUrl(c);
+  const url = liveCardUrl(c);
   const a = document.createElement('a');
   a.href = url; a.target = '_blank'; a.rel = 'noopener';
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
@@ -4604,10 +4650,31 @@ function encodeCardUrl(c) {
   return 'https://igorzagorij5-dot.github.io/happyzavr/#' + slug + '/' + b64;
 }
 
+// Розкодувати clientKey назад у c.id
+function decodeId(key) {
+  try {
+    const b64 = String(key||'').replace(/-/g,'+').replace(/_/g,'/');
+    const pad = b64.length % 4 ? '='.repeat(4 - b64.length % 4) : '';
+    const bin = atob(b64 + pad);
+    const bytes = new Uint8Array(bin.length);
+    for (let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder('utf-8').decode(bytes);
+  } catch(e){ return ''; }
+}
+
+// ЖИВЕ посилання: якщо налаштована хмара — картка підтягує свіжі дані з біна
+// і оновлюється сама. Якщо хмари немає — статичний знімок (як раніше).
+function liveCardUrl(c) {
+  const binId = cfg.binId || localStorage.getItem('hp_binId');
+  if (!binId) return encodeCardUrl(c);
+  const slug = (c.name || '').trim().replace(/[#/\\?&~]/g,' ').replace(/\s+/g,'-');
+  return 'https://igorzagorij5-dot.github.io/happyzavr/#' + slug + '/L/' + binId + '/' + encodeId(c.id);
+}
+
 function copyCardLink(id) {
   const c = clients.find(x=>x.id===id);
   if (!c) return;
-  const url = encodeCardUrl(c);
+  const url = liveCardUrl(c);
   copyText(url);
   toast('✅ Посилання скопійовано!', 'success');
 }
